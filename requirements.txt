@@ -3,3 +3,7 @@ fastapi==0.115.2
 pandas==2.2.3
 numpy==1.26.4
 setfit==1.1.0
+fastapi[standard]
+PyPDF2
+openpyxl
+streamlit
