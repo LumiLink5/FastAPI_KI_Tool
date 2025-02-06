@@ -12,7 +12,7 @@ import numpy as np
 sys.path.append('cpv_info/')
 import cpv_dataframe
 
-ft_repo_id = "tanjapry/fasttext_ausschreibung"
+ft_repo_id = "tanjapry/fasttext_42l_117e_title_description"
 ft_model_path = hf_hub_download(repo_id=ft_repo_id, filename="model.bin")
 fasttext_model = fasttext.load_model(ft_model_path)
 
@@ -26,61 +26,61 @@ cpv_numbers = pd.read_json(CPV_DIR)
 app = FastAPI()
 
 class ModelName(str, Enum):
-    setfit = "Großes Model"
-    fasttext = "Kleines Model"
+    fasttext = "Großes Model"
+    setfit = "Kleines Model"
 
 class User_input(BaseModel):
     model_name : ModelName
-    k : int
+    #k : int
     q : str
 
 @app.post("/cpv")
 async def read_items(input:User_input):
     global fasttext_model, setfit_model
 
-    welcome_message = (
-        "Willkommen zur Testanwendung für die automatische Generierung von CPV-Codes für Ausschreibungen. "
-        "Diese Anwendung wurde von Dataport in Zusammenarbeit mit der Universität Bremen entwickelt. " 
-        "Ziel ist es, den Prozess der Codierung zu optimieren und effizienter zu gestalten. "
-    )
+    print(input.q)
 
-    end_message = (
-        "Beide Modelle wurden auf denselben Datensätzen trainiert und basieren ausschließlich auf der obersten Ebene der CPV-Nummern (den Divisions). " 
-        "Eine detailliertere Betrachtung der hierarchischen Struktur der CPV-Nummern wurde bisher nicht vorgenommen. " 
-        "Bei dem Projekt beteiligt sind: Gerhard Klaasen, Robin Fritzsche, Marco Kruse, Andrey Krutilin, Benjamin Haberkorn, Tetiana Prykhodko. " 
-        "Bei Fragen sprechen Sie uns gerne an!"
-    )
-    
+    #min_percent = f"0.{input.k}"
+    #min_percent = float(min_percent)
+    min_percent = 0.01
+
     if input.model_name is ModelName.setfit:
         if setfit_model is None:
             raise HTTPException(status_code=500, detail="SetFit model not loaded")
         proba = setfit_model.predict_proba(input.q)
         proba_np = proba.numpy()
-        top_k_indices = np.argsort(proba_np)[::-1][:input.k]
-        top_k_labels = [setfit_model.labels[i] for i in top_k_indices]
-        top_k_probabilities = proba_np[top_k_indices]
-        top_k_percentages = [f"{prob * 100:.2f}%" for prob in top_k_probabilities]
+
+        filtered_indices = np.where(proba_np > min_percent)[0]  
+        filtered_labels = [setfit_model.labels[i] for i in filtered_indices]
+        filtered_probabilities = proba_np[filtered_indices]
+        filtered_percentages = [f"{round(prob * 100)}%" for prob in filtered_probabilities]
+
 
     elif input.model_name == ModelName.fasttext:
         if fasttext_model is None:
             raise HTTPException(status_code=500, detail="FastText model not loaded")
-        predictions = fasttext_model.predict(input.q, k=input.k)
-        top_k_labels = [label.replace('__label__', '') for label in predictions[0]]
-        top_k_probabilities = predictions[1]
-        top_k_percentages = [f"{prob * 100:.2f}%" for prob in top_k_probabilities]
+        predictions = fasttext_model.predict(input.q, k=-1)  # k=-1 to get predictions for all labels
+        all_labels = predictions[0]
+        all_probabilities = predictions[1]
+        
+        filtered_indices = [i for i, prob in enumerate(all_probabilities) if prob > min_percent]
+        filtered_labels = [all_labels[i].replace('__label__', '') for i in filtered_indices]
+        filtered_probabilities = [all_probabilities[i] for i in filtered_indices]
+        filtered_percentages = [f"{round(prob * 100)}%" for prob in filtered_probabilities]
 
-    print(top_k_labels)
+
+    print(filtered_labels)
 
     bezeichnung_list = []
 
-    for label in top_k_labels:
+    for label in filtered_labels:
         bezeichnung = cpv_numbers[(cpv_numbers["classification"] == "division") & 
                                         (cpv_numbers["division"] == int(label))]["DE"].values[0]
         bezeichnung_list.append(bezeichnung)
 
     cpv_list = []
 
-    for label in top_k_labels:
+    for label in filtered_labels:
         bezeichnung = cpv_numbers[(cpv_numbers["classification"] == "division") & 
                                         (cpv_numbers["division"] == int(label))]["CODE"].values[0]
         cpv_list.append(bezeichnung)
@@ -89,11 +89,11 @@ async def read_items(input:User_input):
 
     cpv_description_list = []
 
-    for label in top_k_labels:
+    for label in filtered_labels:
         label_description = result_df[(result_df["classification"] == "division") & (result_df["division"] == label)]["description"].values[0]
         cpv_description_list.append(label_description)
 
-    top_k_predictions = list(zip(bezeichnung_list, cpv_list, cpv_description_list, top_k_percentages))
+    top_k_predictions = list(zip(bezeichnung_list, cpv_list, cpv_description_list, filtered_percentages))
 
 
 
